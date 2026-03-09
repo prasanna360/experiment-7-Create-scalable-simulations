@@ -92,47 +92,153 @@ To create **two datacenters with one host each** and execute cloudlets from **tw
 
 
 ## Program
-import org.cloudbus.cloudsim.*;
+import org.cloudbus.cloudsim.Cloudlet;
+import org.cloudbus.cloudsim.CloudletSchedulerTimeShared;
+import org.cloudbus.cloudsim.Datacenter;
+import org.cloudbus.cloudsim.DatacenterBroker;
+import org.cloudbus.cloudsim.DatacenterCharacteristics;
+import org.cloudbus.cloudsim.Host;
+import org.cloudbus.cloudsim.Pe;
+import org.cloudbus.cloudsim.Storage;
+import org.cloudbus.cloudsim.UtilizationModel;
+import org.cloudbus.cloudsim.UtilizationModelFull;
+import org.cloudbus.cloudsim.Vm;
+import org.cloudbus.cloudsim.VmAllocationPolicySimple;
+import org.cloudbus.cloudsim.VmSchedulerTimeShared;
+
 import org.cloudbus.cloudsim.core.CloudSim;
-import org.cloudbus.cloudsim.provisioners.*;
+
+import org.cloudbus.cloudsim.provisioners.BwProvisionerSimple;
+import org.cloudbus.cloudsim.provisioners.PeProvisionerSimple;
+import org.cloudbus.cloudsim.provisioners.RamProvisionerSimple;
 
 import java.util.*;
 
-public class EC2WindowsRDPAccess {
+public class ScalableSimulation {
 
-    private static Datacenter createDatacenter(String name) {
+    private static List<Vm> vmList;
+    private static List<Cloudlet> cloudletList;
+
+    public static void main(String[] args) {
+
+        try {
+
+            int numUsers = 1;
+            Calendar calendar = Calendar.getInstance();
+            boolean traceFlag = false;
+
+            CloudSim.init(numUsers, calendar, traceFlag);
+
+            // ---------- SCALABLE PARAMETERS ----------
+            int numDatacenters = 2;
+            int hostsPerDatacenter = 2;
+            int numberOfVMs = 2;
+            int numberOfCloudlets = 10;
+
+            // ---------- CREATE DATACENTERS ----------
+            for (int i = 0; i < numDatacenters; i++) {
+                createDatacenter("Datacenter_" + i, hostsPerDatacenter);
+            }
+
+            // ---------- CREATE BROKER ----------
+            DatacenterBroker broker = createBroker();
+            int brokerId = broker.getId();
+
+            // ---------- CREATE VMs ----------
+            vmList = new ArrayList<>();
+
+            for (int i = 0; i < numberOfVMs; i++) {
+                int mips = 500 + (i * 200);
+                long size = 10000;
+                int ram = 1024;
+                long bw = 1000;
+                int pesNumber = 1;
+                String vmm = "Xen";
+
+                Vm vm = new Vm(i, brokerId, mips, pesNumber, ram, bw, size,
+                        vmm, new CloudletSchedulerTimeShared());
+
+                vmList.add(vm);
+            }
+
+            broker.submitVmList(vmList);
+
+            // ---------- CREATE CLOUDLETS ----------
+            cloudletList = new ArrayList<>();
+            UtilizationModel utilizationModel = new UtilizationModelFull();
+
+            for (int i = 0; i < numberOfCloudlets; i++) {
+
+                long length = 40000 + (i * 5000);
+                long fileSize = 300;
+                long outputSize = 300;
+                int pesNumber = 1;
+
+                Cloudlet cloudlet = new Cloudlet(i, length, pesNumber,
+                        fileSize, outputSize,
+                        utilizationModel,
+                        utilizationModel,
+                        utilizationModel);
+
+                cloudlet.setUserId(brokerId);
+                cloudletList.add(cloudlet);
+            }
+
+            broker.submitCloudletList(cloudletList);
+
+            // ---------- START SIMULATION ----------
+            CloudSim.startSimulation();
+
+            List<Cloudlet> newList = broker.getCloudletReceivedList();
+
+            CloudSim.stopSimulation();
+
+            printCloudletList(newList);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // -----------------------------------------------------
+    // CREATE DATACENTER
+    // -----------------------------------------------------
+    private static Datacenter createDatacenter(String name, int hostsCount) {
 
         List<Host> hostList = new ArrayList<>();
 
-        List<Pe> peList = new ArrayList<>();
-        int mips = 3000;
+        for (int i = 0; i < hostsCount; i++) {
 
-        peList.add(new Pe(0, new PeProvisionerSimple(mips)));
-        peList.add(new Pe(1, new PeProvisionerSimple(mips)));
-        peList.add(new Pe(2, new PeProvisionerSimple(mips)));
-        peList.add(new Pe(3, new PeProvisionerSimple(mips)));
+            List<Pe> peList = new ArrayList<>();
 
-        int hostRam = 32768;
-        long storage = 2000000;
-        int bw = 20000;
+            int mips = 1000;
 
-        Host host = new Host(
-                0,
-                new RamProvisionerSimple(hostRam),
-                new BwProvisionerSimple(bw),
-                storage,
-                peList,
-                new VmSchedulerTimeShared(peList)
-        );
+            for (int j = 0; j < 4; j++) {
+                peList.add(new Pe(j, new PeProvisionerSimple(mips)));
+            }
 
-        hostList.add(host);
+            int hostId = i;
+            int ram = 8192;
+            long storage = 1000000;
+            int bw = 10000;
+
+            hostList.add(
+                    new Host(
+                            hostId,
+                            new RamProvisionerSimple(ram),
+                            new BwProvisionerSimple(bw),
+                            storage,
+                            peList,
+                            new VmSchedulerTimeShared(peList)
+                    )
+            );
+        }
 
         String arch = "x86";
-        String os = "Windows";
+        String os = "Linux";
         String vmm = "Xen";
-
-        double time_zone = 10.0;
-        double cost = 3.0;
+        double timeZone = 10.0;
+        double costPerSec = 3.0;
         double costPerMem = 0.05;
         double costPerStorage = 0.001;
         double costPerBw = 0.0;
@@ -140,18 +246,15 @@ public class EC2WindowsRDPAccess {
         DatacenterCharacteristics characteristics =
                 new DatacenterCharacteristics(
                         arch, os, vmm, hostList,
-                        time_zone, cost,
-                        costPerMem, costPerStorage, costPerBw);
+                        timeZone, costPerSec,
+                        costPerMem, costPerStorage,
+                        costPerBw);
 
         Datacenter datacenter = null;
-
         try {
-            datacenter = new Datacenter(
-                    name,
-                    characteristics,
+            datacenter = new Datacenter(name, characteristics,
                     new VmAllocationPolicySimple(hostList),
-                    new LinkedList<Storage>(),
-                    0);
+                    new LinkedList<Storage>(), 0);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -159,150 +262,51 @@ public class EC2WindowsRDPAccess {
         return datacenter;
     }
 
+    // -----------------------------------------------------
+    // CREATE BROKER
+    // -----------------------------------------------------
     private static DatacenterBroker createBroker() {
+
         DatacenterBroker broker = null;
         try {
-            broker = new DatacenterBroker("EC2Broker");
+            broker = new DatacenterBroker("Broker");
         } catch (Exception e) {
             e.printStackTrace();
         }
         return broker;
     }
 
-    public static void main(String[] args) {
+    // -----------------------------------------------------
+    // PRINT RESULTS
+    // -----------------------------------------------------
+    private static void printCloudletList(List<Cloudlet> list) {
 
-        try {
+        System.out.println("\n========== OUTPUT ==========");
+        System.out.println("Cloudlet ID\tStatus\tVM ID\tTime\tStart\tFinish");
 
-            System.out.println("Starting EC2 Windows Instance Simulation...");
+        for (Cloudlet cloudlet : list) {
 
-            int numUser = 1;
-            Calendar calendar = Calendar.getInstance();
-            boolean traceFlag = false;
+            System.out.print(cloudlet.getCloudletId() + "\t\t");
 
-            CloudSim.init(numUser, calendar, traceFlag);
-
-            Datacenter datacenter0 = createDatacenter("AWS-Datacenter");
-
-            DatacenterBroker broker = createBroker();
-            int brokerId = broker.getId();
-
-            List<Vm> vmList = new ArrayList<>();
-
-            int vmid = 0;
-            int mips = 1500;
-            long size = 40000;
-            int ram = 8192;
-            long bw = 2000;
-            int pesNumber = 2;
-            String vmm = "Xen";
-
-            Vm vm = new Vm(
-                    vmid,
-                    brokerId,
-                    mips,
-                    pesNumber,
-                    ram,
-                    bw,
-                    size,
-                    vmm,
-                    new CloudletSchedulerTimeShared()
-            );
-
-            vmList.add(vm);
-
-            broker.submitVmList(vmList);
-
-            List<Cloudlet> cloudletList = new ArrayList<>();
-
-            int id = 0;
-            long length = 50000;
-            long fileSize = 300;
-            long outputSize = 300;
-
-            UtilizationModel utilizationModel = new UtilizationModelFull();
-
-            Cloudlet cloudlet = new Cloudlet(
-                    id,
-                    length,
-                    pesNumber,
-                    fileSize,
-                    outputSize,
-                    utilizationModel,
-                    utilizationModel,
-                    utilizationModel
-            );
-
-            cloudlet.setUserId(brokerId);
-            cloudlet.setVmId(vmid);
-
-            cloudletList.add(cloudlet);
-
-            broker.submitCloudletList(cloudletList);
-
-            System.out.println("\nEC2 Instance Configuration");
-            System.out.println("-----------------------------");
-            System.out.println("Operating System : Windows Server");
-            System.out.println("Instance Type : t3.medium");
-            System.out.println("CPU Cores : 2");
-            System.out.println("RAM : 8 GB");
-            System.out.println("Storage : 40 GB");
-
-            System.out.println("\nSecurity Group Configuration");
-            System.out.println("-----------------------------");
-            System.out.println("Protocol : RDP");
-            System.out.println("Port : 3389");
-
-            System.out.println("Access Mode 1 : Allow from ANY network (0.0.0.0/0)");
-            System.out.println("Access Mode 2 : Allow from Specific Network (192.168.1.0/24)");
-
-            System.out.println("\nAuthentication Method");
-            System.out.println("-----------------------------");
-            System.out.println("Key Pair : windows-key.pem");
-            System.out.println("Private key used to decrypt Administrator password");
-
-            System.out.println("\nLaunching EC2 Windows Instance...");
-
-            CloudSim.startSimulation();
-
-            List<Cloudlet> resultList = broker.getCloudletReceivedList();
-
-            CloudSim.stopSimulation();
-
-            System.out.println("\nSimulation Result");
-            System.out.println("-----------------------------");
-
-            for (Cloudlet cloudletResult : resultList) {
-
+            if (cloudlet.getStatus() == Cloudlet.SUCCESS) {
+                System.out.print("SUCCESS\t");
                 System.out.println(
-                        "Cloudlet ID: " + cloudletResult.getCloudletId() +
-                                " | VM ID: " + cloudletResult.getVmId() +
-                                " | Status: SUCCESS" +
-                                " | Finish Time: " + cloudletResult.getFinishTime()
+                        cloudlet.getVmId() + "\t" +
+                                cloudlet.getActualCPUTime() + "\t" +
+                                cloudlet.getExecStartTime() + "\t" +
+                                cloudlet.getFinishTime()
                 );
             }
-
-            System.out.println("\nEC2 Windows Instance Successfully Launched");
-            System.out.println("Public IP : 54.210.120.45");
-            System.out.println("RDP Port : 3389");
-
-            System.out.println("\nTo connect using RDP client:");
-            System.out.println("1. Open Remote Desktop (mstsc)");
-            System.out.println("2. Enter Public IP");
-            System.out.println("3. Username : Administrator");
-            System.out.println("4. Decrypt password using private key");
-
-        }
-
-        catch (Exception e) {
-            e.printStackTrace();
-            System.out.println("Simulation Failed");
         }
     }
 }
 
  ## Output 
 
-<img width="811" height="250" alt="image" src="https://github.com/user-attachments/assets/a5b9d458-dde9-4451-b361-3f3fcac6f64d" />
+<img width="791" height="274" alt="image" src="https://github.com/user-attachments/assets/9be3923b-6fcb-4d9e-a08f-957ed86d6be5" />
+<img width="772" height="259" alt="image" src="https://github.com/user-attachments/assets/fc4086d8-97a6-4df1-8abf-8ab066c524fd" />
+<img width="754" height="98" alt="image" src="https://github.com/user-attachments/assets/5754e389-1819-4ab6-b4e1-a202b29ddf55" />
+<img width="783" height="675" alt="image" src="https://github.com/user-attachments/assets/4b67484a-f2ea-43c3-b21d-c3e28e8900fb" />
 
 
 
